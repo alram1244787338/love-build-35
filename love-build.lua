@@ -147,25 +147,35 @@ return {
     end
     love.build.log('target platforms: "' .. love.build.targets .. '"')
 
-    -- lib entries are also ignored
+    -- lib entries are copied into each platform's output folder directly
+    -- (rather than fused into the binary), so they should NOT end up inside the
+    -- shared .love archive. we ignore them by their FULL path relative to the
+    -- project root - not just the filename - so that real game resources that
+    -- happen to share a filename with a lib are not dropped from the .love
     love.build.opts.libs = opts.libs or {}
+    local function ignoreLib(libpath, label)
+      if type(libpath) ~= 'string' then return end
+      -- normalise so it matches the relative paths love-zip builds while
+      -- walking the project (forward slashes, no leading './' or '/')
+      local relpath = libpath:gsub('\\', '/'):gsub('^%./', ''):gsub('^/', '')
+      table.insert(love.build.opts.ignore, relpath)
+      -- flag a missing lib clearly so a bad config entry is easy to spot
+      if love.filesystem.getInfo('project/' .. relpath) == nil then
+        love.build.log('WARNING: lib "' .. relpath .. '" (' .. label ..
+          ') not found in project - check the libs in your build.lua')
+      else
+        love.build.log('excluding lib from .love: "' .. relpath ..
+          '" (' .. label .. ')')
+      end
+    end
     for key, value in pairs(love.build.opts.libs) do
-      if key == 'windows' or key == 'macos' or key == 'linux' or key == 'steamdeck' or key == 'all' then
+      if key == 'windows' or key == 'macos' or key == 'linux' or
+         key == 'steamdeck' or key == 'all' then
         for l=1,#value do
-          local filename = value[l]
-          if filename:find("/[^/]*$") ~= nil then
-            filename = filename:sub(filename:find("/[^/]*$") + 1, #filename)
-          end
-          table.insert(love.build.opts.ignore, filename)
-          print('lib option', filename)
+          ignoreLib(value[l], tostring(key))
         end
       else
-        local filename = value
-        if filename:find("/[^/]*$") ~= nil then
-          filename = filename:sub(filename:find("/[^/]*$") + 1, #filename)
-        end
-        table.insert(love.build.opts.ignore, filename)
-        print('lib option', filename)
+        ignoreLib(value, 'shared')
       end
     end
 

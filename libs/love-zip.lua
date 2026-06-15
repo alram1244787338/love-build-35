@@ -369,9 +369,16 @@ love.zip = {
     local files = love.filesystem.getDirectoryItems(dir)
     for f=1,#files do
       local item = files[f]
+      -- full path of this item relative to the folder root, _folder is the
+      -- relative prefix built up while recursing ('' at the top level)
+      local relpath = _folder .. item
       local ignored = false
       for i=1,#ignore do
-        if ignore[i] == item then ignored = true end
+        -- match either the bare name (so entries like '.DS_Store' or '.git'
+        -- are ignored wherever they appear in the tree) OR the exact relative
+        -- path (so a caller can target one specific file without dropping
+        -- same-named files elsewhere in the project)
+        if ignore[i] == item or ignore[i] == relpath then ignored = true end
       end
       if ignored == false then
         local info = love.filesystem.getInfo(dir .. '/' .. files[f])
