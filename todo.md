@@ -5,7 +5,9 @@
   + appimage issue max chunk size check in case we store bigger blocks?
 
 [windows]
-- file version doesnt seem to update correctly all the time, need to update the FIXED_FILE_INFO as well I think
+- [done] file version now also patches VS_FIXEDFILEINFO (File/Product VersionMS+LS) in
+  love-exedit, not just the StringFileInfo text keys, so explorer's tooltip + Details
+  tab both reflect the build.lua `version` value
 
 
 ---

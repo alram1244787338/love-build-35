@@ -313,9 +313,9 @@ love.exedit = {
                       local newdesc = stringtabledata:sub(1, 37+23)
 
                       -- @TODO
-                      -- using FileVersion or ProductVersion keywords doesnt actually overwrite the version shown in the tooltip of the exe
-                      -- not sure where that version comes from, must be set somewhere else
-                      -- i think possibly the fixedfileinfo
+                      -- the FileVersion/ProductVersion string keys below only populate explorer's "Details" tab,
+                      -- the version shown in explorer's tooltip comes from VS_FIXEDFILEINFO instead,
+                      -- which is now patched right after this StringTable block (search for FIXED_FILE_INFO)
 --
                       newdesc = newdesc .. love.data.pack('string', '<i2', 38 + 4 + #dname) -- length of whole string obj
                       newdesc = newdesc .. love.data.pack('string', '<i2', #dname/2) -- length of actual data in WORD (string len/2)
@@ -342,6 +342,39 @@ love.exedit = {
                       print('love.exedit >         String', 'ProductVersion', dver, #dver)
 
                       local padding = #stringtabledata - #newdesc
+
+                      -- also patch the VS_FIXEDFILEINFO version dwords.
+                      -- explorer + most tooling read the displayed file/product
+                      -- version from here, NOT the StringFileInfo keys above, so
+                      -- both have to be kept in sync or the tooltip wont update.
+                      -- we locate the struct by its signature rather than a fixed
+                      -- offset so a different love build cant silently misalign it
+                      local sig_needle = love.exedit._writeUInt(0xFEEF04BD, 4)
+                      local sig_pos = lvl3_entry.Data:find(sig_needle, 1, true)
+                      if sig_pos == nil or sig_pos > 128 then
+                        print('love.exedit >         error: VS_FIXEDFILEINFO signature not found, version NOT patched', tostring(sig_pos))
+                      else
+                        local msdword, lsdword, parsed, w1, w2, w3, w4 = love.exedit._packFileVersion(love.build.opts.version)
+                        if not parsed then
+                          print('love.exedit >         warn: no numeric version in "' .. tostring(love.build.opts.version) .. '", writing 0.0.0.0 to FIXED_FILE_INFO')
+                        end
+                        -- only overwrite the four version dwords, everything else
+                        -- (signature, flags, OS/type, dates) is preserved as-is
+                        local ffi_versions =
+                          love.exedit._writeUInt(msdword, 4) ..  -- FileVersionMS
+                          love.exedit._writeUInt(lsdword, 4) ..  -- FileVersionLS
+                          love.exedit._writeUInt(msdword, 4) ..  -- ProductVersionMS
+                          love.exedit._writeUInt(lsdword, 4)     -- ProductVersionLS
+                        local ffi_before = lvl3_entry.Data:sub(1, sig_pos+7)
+                        local ffi_after = lvl3_entry.Data:sub(sig_pos+24, #lvl3_entry.Data)
+                        local ffi_patched = ffi_before .. ffi_versions .. ffi_after
+                        if #ffi_patched ~= #lvl3_entry.Data then
+                          print('love.exedit >         error: version patch resized resource, skipping', #ffi_patched, #lvl3_entry.Data)
+                        else
+                          lvl3_entry.Data = ffi_patched
+                          print('love.exedit >         FIXED_FILE_INFO patched to', w1 .. '.' .. w2 .. '.' .. w3 .. '.' .. w4)
+                        end
+                      end
                       newdesc = newdesc .. string.rep(' ', padding)
                       print('love.exedit >         Space remaining:', padding)
 
@@ -550,6 +583,38 @@ love.exedit = {
   -- reads the data from a given index as a UInt
   _readUInt = function(data, index, size)
     return love.data.unpack('<i' .. tostring(size), data:sub(index, index + (size-1)))
+  end,
+
+  -- writes a value as a little-endian unsigned int of the given byte size
+  -- this is the inverse of _readUInt and is used to rewrite fields such as
+  -- the version dwords inside the VS_FIXEDFILEINFO structure
+  _writeUInt = function(value, size)
+    return love.data.pack('string', '<I' .. tostring(size), value)
+  end,
+
+  -- parses a dotted version string ("1", "1.2", "1.2.3.4") into the two
+  -- dwords used by VS_FIXEDFILEINFO. each of the (up to) four components is a
+  -- 16bit WORD: MS dword = (major << 16) | minor, LS dword = (build << 16) | revision
+  -- missing components default to 0 and out of range ones are clamped to 65535
+  -- returns: msdword, lsdword, parsed, major, minor, build, revision
+  _packFileVersion = function(version)
+    local parts = {}
+    for n in tostring(version or ''):gmatch('%d+') do
+      parts[#parts+1] = tonumber(n)
+    end
+    local parsed = #parts > 0
+    local w = {}
+    for i = 1, 4 do
+      local v = parts[i] or 0
+      if v > 65535 then
+        print('love.exedit > warn: version component ' .. i .. ' (' .. tostring(v) .. ') > 65535, clamped')
+        v = 65535
+      end
+      w[i] = v
+    end
+    local msdword = w[1] * 65536 + w[2]
+    local lsdword = w[3] * 65536 + w[4]
+    return msdword, lsdword, parsed, w[1], w[2], w[3], w[4]
   end,
 
   -- turns a string into a windows WORD
