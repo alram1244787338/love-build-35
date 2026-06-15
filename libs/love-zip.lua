@@ -369,9 +369,17 @@ love.zip = {
     local files = love.filesystem.getDirectoryItems(dir)
     for f=1,#files do
       local item = files[f]
+      -- build the relative path of this item from the root folder being added
+      -- _folder contains the accumulated path prefix (e.g. "subdir/nested/")
+      local item_relpath = _folder .. item
       local ignored = false
       for i=1,#ignore do
-        if ignore[i] == item then ignored = true end
+        -- match by basename (backward compatible with entries like ".git")
+        -- or by full relative path (for precise entries like "libs/foo.dll")
+        if ignore[i] == item or ignore[i] == item_relpath then
+          ignored = true
+          break
+        end
       end
       if ignored == false then
         local info = love.filesystem.getInfo(dir .. '/' .. files[f])

@@ -147,25 +147,34 @@ return {
     end
     love.build.log('target platforms: "' .. love.build.targets .. '"')
 
-    -- lib entries are also ignored
+    -- additional libs: ignore by full relative path to avoid excluding
+    -- unrelated project files that happen to share the same basename
     love.build.opts.libs = opts.libs or {}
     for key, value in pairs(love.build.opts.libs) do
       if key == 'windows' or key == 'macos' or key == 'linux' or key == 'steamdeck' or key == 'all' then
+        -- table format: libs = { windows = {'path/to/file.dll'}, ... }
         for l=1,#value do
-          local filename = value[l]
-          if filename:find("/[^/]*$") ~= nil then
-            filename = filename:sub(filename:find("/[^/]*$") + 1, #filename)
+          local filepath = value[l]
+          -- validate that the file exists in the mounted project
+          local info = love.filesystem.getInfo('project/' .. filepath)
+          if info == nil then
+            love.build.log('WARNING: lib file not found: "' .. filepath .. '" (key: ' .. key .. ')')
+          else
+            table.insert(love.build.opts.ignore, filepath)
+            love.build.log('lib option (path): ' .. filepath)
           end
-          table.insert(love.build.opts.ignore, filename)
-          print('lib option', filename)
         end
       else
-        local filename = value
-        if filename:find("/[^/]*$") ~= nil then
-          filename = filename:sub(filename:find("/[^/]*$") + 1, #filename)
+        -- single-entry format: libs = { 'path/to/file.dll', ... }
+        local filepath = value
+        -- validate that the file exists in the mounted project
+        local info = love.filesystem.getInfo('project/' .. filepath)
+        if info == nil then
+          love.build.log('WARNING: lib file not found: "' .. filepath .. '" (key: ' .. key .. ')')
+        else
+          table.insert(love.build.opts.ignore, filepath)
+          love.build.log('lib option (path): ' .. filepath)
         end
-        table.insert(love.build.opts.ignore, filename)
-        print('lib option', filename)
       end
     end
 
