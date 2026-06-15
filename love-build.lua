@@ -185,12 +185,13 @@ return {
     end
     love.build.folder = string.gsub(love.build.folder, ' ', '_')
 
-    -- run preprocess if any 
+    -- run preprocess hook if configured
     if love.build.hooks.before_build then
-      love.build.log('preprocess: ' .. love.build.path .. '/' .. love.build.hooks.before_build)
-      local cmd = 'sh'
-      if love.build.os == 'windows' then cmd = 'bash' end
-      os.execute(cmd .. ' ' .. love.build.path .. '/' .. love.build.hooks.before_build .. ' ' .. love.build.path)
+      love.build.log('running before_build hook...')
+      local hook_ok = love.build.runHook('before_build', love.build.hooks.before_build, {love.build.path})
+      if not hook_ok then
+        love.build.log('warning: before_build hook did not complete successfully, continuing build')
+      end
     end
 
     love.build.log('step finished in ' .. love.build.formatTime(love.timer.getTime() - start_time))
@@ -887,12 +888,15 @@ return {
     love.build.log('finishing build')
 
     -- if output not nil, mount output and move what we've made + logs
-    -- otherwise just open 
+    -- otherwise just open
     local mounted = false
     if love.build.opts.output ~= nil then
       local mountd = love.filesystem.mountFullPath(love.build.opts.output, 'poutput', 'readwrite')
       if mountd ~= true then
-        love.build.log('failed to mount output path "' .. love.build.opts.output .. '", make sure you are not using relative paths in the terminal and the folder exists.')
+        love.build.log('error: failed to mount output path "' .. love.build.opts.output .. '"')
+        love.build.log('error: make sure the output folder exists and you are using an absolute path')
+        love.build.log('error: build artifacts are preserved in the internal save directory')
+        love.build.log('error: you can find them at: ' .. love.filesystem.getSaveDirectory() .. '/output/' .. love.build.folder)
       else
         mounted = true
         local source = 'output/' .. love.build.folder
@@ -916,12 +920,18 @@ return {
       end
     end
 
-    -- run postprocess if any 
+    -- run postprocess hook if configured
     if love.build.hooks.after_build then
-      love.build.log('postprocess: ' .. love.build.path .. '/' .. love.build.hooks.after_build)
-      local cmd = 'sh'
-      if love.build.os == 'windows' then cmd = 'bash' end
-      os.execute(cmd .. ' ' .. love.build.path .. '/' .. love.build.hooks.after_build .. ' ' .. love.build.path .. ' ' .. love.build.opts.output)
+      love.build.log('running after_build hook...')
+      local hook_args = { love.build.path }
+      if love.build.opts.output ~= nil then
+        table.insert(hook_args, love.build.opts.output)
+      end
+      local hook_ok = love.build.runHook('after_build', love.build.hooks.after_build, hook_args)
+      if not hook_ok then
+        love.build.log('warning: after_build hook did not complete successfully')
+        love.build.log('warning: build artifacts are still available in the output directory')
+      end
     end
 
     -- finalise build
@@ -940,10 +950,10 @@ return {
       if mounted == true then
         love.build.copyFile('output/' .. love.build.folder .. '/build.log', 'poutput/' .. love.build.opts.version .. '/build.log')
         local ppath = love.build.opts.output .. '/' .. love.build.opts.version
-        local try = love.system.openURL('file://' .. ppath)
-        if try == false then print('couldnt open output folder, relative path used instead of fullpath: "' .. ppath .. '"') end
+        love.build.openFolder(ppath)
       else
-        love.system.openURL('file://' .. love.filesystem.getSaveDirectory() .. '/output/' .. love.build.folder)
+        local fallback_path = love.filesystem.getSaveDirectory() .. '/output/' .. love.build.folder
+        love.build.openFolder(fallback_path)
       end
 
       -- quit if ran from terminal
@@ -1122,7 +1132,8 @@ return {
     love.build.status = 'Error: ' .. err -- show in gui
     table.insert(love.build.logs, err)
     love.build.dumpLogs()
-    love.system.openURL('file://' .. love.filesystem.getSaveDirectory() .. '/output/' .. love.build.folder)
+    local fallback_path = love.filesystem.getSaveDirectory() .. '/output/' .. love.build.folder
+    love.build.openFolder(fallback_path)
     return false
   end,
 
@@ -1134,6 +1145,111 @@ return {
     local logdata = table.concat(love.build.logs, '\n')
     love.filesystem.write('output/' .. love.build.folder .. '/build.log', logdata)
   end,
+
+  -- @method - love.build.shellQuote()
+  -- @desc - quotes a path for safe use in shell commands, handling spaces
+  --         and special characters. uses single quotes on unix (sh/bash),
+  --         double quotes on windows (cmd.exe).
+  -- @param {string} str - the path or string to quote
+  -- @return {string} - shell-safe quoted string
+  shellQuote = function(str)
+    if str == nil then return '""' end
+    if love.build.os == 'windows' then
+      -- on windows cmd.exe uses double quotes, escape internal double quotes
+      return '"' .. string.gsub(tostring(str), '"', '""') .. '"'
+    else
+      -- on unix sh/bash, single quotes protect everything except single quotes
+      return "'" .. string.gsub(tostring(str), "'", "'\\''") .. "'"
+    end
+  end,
+
+
+  -- @method - love.build.urlEncode()
+  -- @desc - percent-encodes a string for use in URLs (RFC 3986)
+  -- @param {string} str - the string to encode
+  -- @return {string} - URL-encoded string
+  urlEncode = function(str)
+    if str == nil then return '' end
+    return string.gsub(tostring(str), '([^A-Za-z0-9_%-%.~/])', function(c)
+      return string.format('%%%02X', string.byte(c))
+    end)
+  end,
+
+
+  -- @method - love.build.runHook()
+  -- @desc - runs a hook script with proper path quoting and error reporting.
+  --         checks that the script exists before running, captures the exit
+  --         status, and logs clear pass/fail messages per hook name.
+  -- @param {string} hook_name - name of the hook (e.g. 'before_build')
+  -- @param {string} hook_script - relative path to the hook script in the project
+  -- @param {table} args - array of string arguments to pass to the script
+  -- @return {boolean} - true if hook ran successfully, false otherwise
+  runHook = function(hook_name, hook_script, args)
+    local hook_path = love.build.path .. '/' .. hook_script
+
+    -- check that the hook script file exists before running
+    local info = love.filesystem.getInfo('project/' .. hook_script)
+    if info == nil then
+      love.build.log('warning: ' .. hook_name .. ' hook script not found: "' .. hook_script .. '"')
+      love.build.log('warning: skipping ' .. hook_name .. ' (no such file in project)')
+      return false
+    end
+
+    -- build the command with properly quoted arguments
+    local shell = 'sh'
+    if love.build.os == 'windows' then shell = 'bash' end
+
+    local cmd_parts = { shell, love.build.shellQuote(hook_path) }
+    for i = 1, #args do
+      if args[i] ~= nil then
+        table.insert(cmd_parts, love.build.shellQuote(args[i]))
+      end
+    end
+    local cmd = table.concat(cmd_parts, ' ')
+
+    love.build.log('running ' .. hook_name .. ': ' .. cmd)
+
+    -- execute and capture exit status
+    local ok, exit_reason, exit_code = os.execute(cmd)
+
+    -- os.execute returns: true/nil, "exit"/"signal", code
+    -- on some lua versions ok is the exit code directly (0 = success)
+    local success = false
+    if ok == true then
+      success = true
+    elseif type(ok) == 'number' and ok == 0 then
+      success = true
+    end
+
+    if success then
+      love.build.log(hook_name .. ' completed successfully')
+    else
+      local detail = tostring(exit_code or ok or 'unknown')
+      love.build.log('error: ' .. hook_name .. ' failed (exit code: ' .. detail .. ', reason: ' .. tostring(exit_reason) .. ')')
+      love.build.log('error: ' .. hook_name .. ' script: "' .. hook_path .. '"')
+      love.build.log('error: check the script output above for details')
+    end
+
+    return success
+  end,
+
+
+  -- @method - love.build.openFolder()
+  -- @desc - opens a folder in the system file manager, with URL encoding
+  --         and fallback logging on failure
+  -- @param {string} path - absolute filesystem path to open
+  -- @return {boolean} - true if folder was opened successfully
+  openFolder = function(path)
+    local encoded = 'file://' .. love.build.urlEncode(path)
+    local ok = love.system.openURL(encoded)
+    if ok == false then
+      love.build.log('warning: could not open folder: "' .. path .. '"')
+      love.build.log('warning: you can find the output manually at the path above')
+      return false
+    end
+    return true
+  end,
+
 
   -- @method - love.build.formatTime
   -- @desc - formats seconds nicely

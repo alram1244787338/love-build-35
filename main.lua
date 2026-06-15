@@ -75,7 +75,7 @@ love.errorhandler = function(msg)
   love.build.dumpLogs()
 
   -- open logs file
-  love.system.openURL('file://' .. love.filesystem.getSaveDirectory() .. '/output/' .. love.build.folder)
+  love.build.openFolder(love.filesystem.getSaveDirectory() .. '/output/' .. love.build.folder)
 
   -- add present to def draw
   local function draw()
