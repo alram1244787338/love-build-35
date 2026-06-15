@@ -1,8 +1,8 @@
 -- love-exedit
--- very, VERY WIP way to modify the .exe resources of the love source binary
--- currently just changes the ICON to the given icon image 
+-- modify the .exe resources of the love source binary
+-- changes the ICON to the given icon image and updates VERSION resource
+-- (both VS_FIXEDFILEINFO binary fields and StringTable entries)
 
--- @TODO clean this mess up
 -- @NOTE requires love, bit, love-icon
 
 --[[
@@ -285,9 +285,7 @@ love.exedit = {
                   print('love.exedit >       VarFileInfo', varfileinfo.szKey)
 
                   local stringtabledata = lvl3_entry.Data:sub(sfi_start, sfi_start+stringfileinfo.wLength-1)
-                  if not debug_mode then love.filesystem.write('testing2', stringtabledata) end
                   local st_start = 37
-                  --if not debug_mode then love.filesystem.write('testing2', stringtabledata) end
                   -- now we need to get the actual stringtable under stringfileinfo for the data
                   local stringtable = {
                     wLength = love.exedit._readUInt(stringtabledata, st_start, 2),
@@ -306,51 +304,106 @@ love.exedit = {
                       love.exedit._readStringTable(stringtabledata, st_start+24, stringtable.wLength-24, {})
                     else
 
-                      -- we replace the StringTable with our own table containing the data 
-                      -- set by the user 
+                      -- build version string table entries from build config
                       local dname = love.exedit._writeWord(love.build.opts.name .. ' by ' .. love.build.opts.developer)
-                      local dver = love.exedit._writeWord(love.build.opts.version)
+                      local dver  = love.exedit._writeWord(love.build.opts.version)
+                      local dcomp = love.exedit._writeWord(love.build.opts.developer)
+                      local dprod = love.exedit._writeWord(love.build.opts.name)
+
+                      -- parse version for FIXED_FILE_INFO binary fields
+                      local vp = love.exedit._parseVersionString(love.build.opts.version)
+                      print('love.exedit >         version parts:', vp[1], vp[2], vp[3], vp[4])
+
+                      -- build replacement StringTable content (header preserved from original)
                       local newdesc = stringtabledata:sub(1, 37+23)
 
-                      -- @TODO
-                      -- using FileVersion or ProductVersion keywords doesnt actually overwrite the version shown in the tooltip of the exe
-                      -- not sure where that version comes from, must be set somewhere else
-                      -- i think possibly the fixedfileinfo
---
-                      newdesc = newdesc .. love.data.pack('string', '<i2', 38 + 4 + #dname) -- length of whole string obj
-                      newdesc = newdesc .. love.data.pack('string', '<i2', #dname/2) -- length of actual data in WORD (string len/2)
-                      newdesc = newdesc .. love.data.pack('string', '<i2', 1) -- type 1 (text)
-                      newdesc = newdesc .. 'F i l e D e s c r i p t i o n ' -- keyword
-                      newdesc = newdesc .. love.data.pack('string', '<i2', 0) -- padding (0)
+                      -- FileDescription
+                      newdesc = newdesc .. love.data.pack('string', '<i2', 38 + 4 + #dname)
+                      newdesc = newdesc .. love.data.pack('string', '<i2', #dname/2)
+                      newdesc = newdesc .. love.data.pack('string', '<i2', 1)
+                      newdesc = newdesc .. 'F i l e D e s c r i p t i o n '
+                      newdesc = newdesc .. love.data.pack('string', '<i2', 0)
                       newdesc = newdesc .. '  ' .. dname .. '  '
-                      print('love.exedit >         String', 'FileDescription', dname, #dname)
---
-                      newdesc = newdesc .. love.data.pack('string', '<i2', 30 + 4 + #dver) -- length of whole string obj
-                      newdesc = newdesc .. love.data.pack('string', '<i2', #dver/2) -- length of actual data in WORD (string len/2)
-                      newdesc = newdesc .. love.data.pack('string', '<i2', 1) -- type 1 (text)
-                      newdesc = newdesc .. 'F i l e V e r s i o n ' -- keyword
-                      newdesc = newdesc .. love.data.pack('string', '<i2', 0) -- padding (0)
-                      newdesc = newdesc .. '  ' .. dver .. '  '
-                      print('love.exedit >         String', 'FileVersion', dver, #dver)
---
-                      newdesc = newdesc .. love.data.pack('string', '<i2', 36 + 4 + #dver) -- length of whole string obj
-                      newdesc = newdesc .. love.data.pack('string', '<i2', #dver/2) -- length of actual data in WORD (string len/2)
-                      newdesc = newdesc .. love.data.pack('string', '<i2', 1) -- type 1 (text)
-                      newdesc = newdesc .. 'P r o d u c t V e r s i o n ' -- keyword
-                      newdesc = newdesc .. love.data.pack('string', '<i2', 0) -- padding (0)
-                      newdesc = newdesc .. '  ' .. dver .. '  '
-                      print('love.exedit >         String', 'ProductVersion', dver, #dver)
+                      print('love.exedit >         String', 'FileDescription', #dname)
 
+                      -- FileVersion
+                      newdesc = newdesc .. love.data.pack('string', '<i2', 30 + 4 + #dver)
+                      newdesc = newdesc .. love.data.pack('string', '<i2', #dver/2)
+                      newdesc = newdesc .. love.data.pack('string', '<i2', 1)
+                      newdesc = newdesc .. 'F i l e V e r s i o n '
+                      newdesc = newdesc .. love.data.pack('string', '<i2', 0)
+                      newdesc = newdesc .. '  ' .. dver .. '  '
+                      print('love.exedit >         String', 'FileVersion', #dver)
+
+                      -- ProductVersion
+                      newdesc = newdesc .. love.data.pack('string', '<i2', 36 + 4 + #dver)
+                      newdesc = newdesc .. love.data.pack('string', '<i2', #dver/2)
+                      newdesc = newdesc .. love.data.pack('string', '<i2', 1)
+                      newdesc = newdesc .. 'P r o d u c t V e r s i o n '
+                      newdesc = newdesc .. love.data.pack('string', '<i2', 0)
+                      newdesc = newdesc .. '  ' .. dver .. '  '
+                      print('love.exedit >         String', 'ProductVersion', #dver)
+
+                      -- CompanyName
+                      newdesc = newdesc .. love.data.pack('string', '<i2', 26 + 4 + #dcomp)
+                      newdesc = newdesc .. love.data.pack('string', '<i2', #dcomp/2)
+                      newdesc = newdesc .. love.data.pack('string', '<i2', 1)
+                      newdesc = newdesc .. 'C o m p a n y N a m e '
+                      newdesc = newdesc .. love.data.pack('string', '<i2', 0)
+                      newdesc = newdesc .. '  ' .. dcomp .. '  '
+                      print('love.exedit >         String', 'CompanyName', #dcomp)
+
+                      -- ProductName
+                      newdesc = newdesc .. love.data.pack('string', '<i2', 28 + 4 + #dprod)
+                      newdesc = newdesc .. love.data.pack('string', '<i2', #dprod/2)
+                      newdesc = newdesc .. love.data.pack('string', '<i2', 1)
+                      newdesc = newdesc .. 'P r o d u c t N a m e '
+                      newdesc = newdesc .. love.data.pack('string', '<i2', 0)
+                      newdesc = newdesc .. '  ' .. dprod .. '  '
+                      print('love.exedit >         String', 'ProductName', #dprod)
+
+                      -- pad remaining space to match original StringTable size exactly
                       local padding = #stringtabledata - #newdesc
+                      if padding < 0 then
+                        print('love.exedit >         ERROR: version string table data exceeds original size by', -padding, 'bytes')
+                        print('love.exedit >         config values may be too long: name="', love.build.opts.name, '" developer="', love.build.opts.developer, '" version="', love.build.opts.version, '"')
+                        newdesc = newdesc:sub(1, #stringtabledata)
+                        padding = 0
+                      end
                       newdesc = newdesc .. string.rep(' ', padding)
-                      print('love.exedit >         Space remaining:', padding)
+                      print('love.exedit >         string table:', #newdesc, 'bytes, padding:', padding)
 
+                      -- patch VS_FIXEDFILEINFO binary version fields
+                      -- Windows Explorer reads version numbers from here, not from the string table
+                      local ffi_offset = 39 + vpad  -- offset of FIXED_FILE_INFO in lvl3_entry.Data
+                      local ffi_sig = love.exedit._readUInt(lvl3_entry.Data, ffi_offset, 4)
+                      if ffi_sig == 0xFEEF04BD or ffi_sig == -17958193 then
+                        local fv_dwords = love.exedit._writeVersionDwords(vp[1], vp[2], vp[3], vp[4])
+                        local pv_dwords = love.exedit._writeVersionDwords(vp[1], vp[2], vp[3], vp[4])
+                        -- FileVersionMS at ffi_offset+8, FileVersionLS at ffi_offset+12
+                        -- ProductVersionMS at ffi_offset+16, ProductVersionLS at ffi_offset+20
+                        local abs_ffi = rsrc_data_index + lvl3_entry.Position - 2 + ffi_offset - 1
+                        new_data = new_data:sub(1, abs_ffi + 7)
+                                .. fv_dwords .. pv_dwords
+                                .. new_data:sub(abs_ffi + 8 + 16 + 1)
+                        print('love.exedit >         FIXED_FILE_INFO patched:', vp[1] .. '.' .. vp[2] .. '.' .. vp[3] .. '.' .. vp[4])
+                      else
+                        print('love.exedit >         WARN: FIXED_FILE_INFO signature mismatch (got', string.format("0x%08X", ffi_sig), ') - binary version fields not updated')
+                      end
+
+                      -- write modified version resource data back into the exe
+                      local new_version_data = lvl3_entry.Data:sub(1, sfi_start-1) .. newdesc .. lvl3_entry.Data:sub(sfi_start+stringfileinfo.wLength-1, lvl3_entry.DataSize-1)
+                      local before_size = #new_data
                       local prefix = new_data:sub(1, rsrc_data_index+lvl3_entry.Position-2)
-                      local newdata = lvl3_entry.Data:sub(1, sfi_start-1) .. newdesc .. lvl3_entry.Data:sub(sfi_start+stringfileinfo.wLength-1, lvl3_entry.DataSize-1)
-                      love.filesystem.write('testing', newdesc)
                       local suffix = new_data:sub(rsrc_data_index+lvl3_entry.Position-2+lvl3_entry.DataSize+1, #new_data)
-                      new_data = prefix .. newdata .. suffix
-                    
+                      new_data = prefix .. new_version_data .. suffix
+                      local after_size = #new_data
+                      if before_size ~= after_size then
+                        print('love.exedit >         ERROR: version resource write changed file size by', after_size - before_size, 'bytes')
+                        print('love.exedit >         this may corrupt subsequent resources (icons etc.)')
+                      end
+                      print('love.exedit >         version info written to exe successfully')
+
                     end
                   end
                 end
@@ -563,6 +616,29 @@ love.exedit = {
   end,
 
  
+  -- parses a dotted version string like "1.2.3" or "1.2.3.4" into numeric parts
+  -- returns { major, minor, patch, revision }, each defaulting to 0
+  _parseVersionString = function(ver)
+    local parts = { 0, 0, 0, 0 }
+    if ver == nil or ver == '' then return parts end
+    local i = 1
+    for num in string.gmatch(ver, '(%d+)') do
+      if i <= 4 then
+        parts[i] = tonumber(num) or 0
+        i = i + 1
+      end
+    end
+    return parts
+  end,
+
+  -- writes four version fields (major, minor, patch, revision) as two DWORDs
+  -- suitable for VS_FIXEDFILEINFO FileVersionMS/LS or ProductVersionMS/LS
+  -- MS = (major << 16) | minor, LS = (patch << 16) | revision
+  _writeVersionDwords = function(major, minor, patch, revision)
+    return love.data.pack('string', '<i4', major * 65536 + (minor or 0))
+        .. love.data.pack('string', '<i4', (patch or 0) * 65536 + (revision or 0))
+  end,
+
   -- datatypes to use with readDataType
   _DATA_TYPES = {
     RESOURCE_DIRECTORY = {

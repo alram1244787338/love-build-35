@@ -1,11 +1,14 @@
 # Future Stuff
 [linux]
 - add `love-squashfs` :compress() for repackaging linux as an AppImage (chunk cap check)
-  + still keep the 'basic' output for linux, i.e. both -linux AND -AppImage ZIPs 
+  + still keep the 'basic' output for linux, i.e. both -linux AND -AppImage ZIPs
   + appimage issue max chunk size check in case we store bigger blocks?
 
 [windows]
-- file version doesnt seem to update correctly all the time, need to update the FIXED_FILE_INFO as well I think
+- FIXED_FILE_INFO now patched with binary version fields (FileVersionMS/LS,
+  ProductVersionMS/LS) so Explorer shows the correct version. String table also
+  includes CompanyName and ProductName. Size validation added with warnings if
+  the new data exceeds the original resource space.
 
 
 ---
